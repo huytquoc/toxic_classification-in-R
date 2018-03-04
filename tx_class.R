@@ -93,18 +93,60 @@ metric_specificity <- function(y_true, y_pred){
   return(true_negatives / (possible_negatives + k_epsilon())) 
 }
 
+metric_precision <- function(y_true, y_pred){
+  # #Precision metric.
+  # 
+  # Only computes a batch-wise average of precision.
+  # 
+  # Computes the precision, a metric for multi-label classification of
+  # how many selected items are relevant.
+  
+  true_positives = k_sum(k_round(k_clip(y_true * y_pred, 0, 1)))
+  predicted_positives = k_sum(k_round(k_clip(y_pred, 0, 1)))
+  precision = true_positives / (predicted_positives + k_epsilon())
+  return(precision)
+}
+
+metric_recall <- function(y_true, y_pred){
+  # """Recall metric.
+  # 
+  # Only computes a batch-wise average of recall.
+  # 
+  # Computes the recall, a metric for multi-label classification of
+  # how many relevant items are selected.
+  # """
+  
+  true_positives = k_sum(k_round(k_clip(y_true * y_pred, 0, 1)))
+  possible_positives = k_sum(k_round(k_clip(y_true, 0, 1)))
+  recall = true_positives / (possible_positives + k_epsilon())
+  return(recall)
+}
+
+metric_f1 <- function(y_true, y_pred){
+  precision = metric_precision(y_true, y_pred)
+  recall = metric_recall(y_true, y_pred)
+  return(2*((precision*recall)/(precision+recall)))
+}
+
+  
+
+
+
 t = 0.5 #both classes are equally important
 n_non_toxic = sum(y_train==0)
 n_yes_toxic = sum(y_train==1)
 n_total = length(y_train)
 
+X_train_norm <- normalize(X_train)
+X_test_norm <- normalize(X_test)
+
 #####
 model <- keras_model_sequential() %>%
-  layer_dense(units = 256, activation = "relu", input_shape = c(ncol(X_train))) %>%
+  layer_dense(units = 100, activation = "relu", input_shape = c(ncol(X_train))) %>%
   layer_dropout(rate = 0.5) %>%
-  layer_dense(units = 128, activation = "relu") %>%
+  layer_dense(units = 50, activation = "relu") %>%
   layer_dropout(rate = 0.2) %>%
-  layer_dense(units = 56, activation = "relu") %>%
+  layer_dense(units = 25, activation = "relu") %>%
   layer_dropout(rate = 0.1) %>%
   layer_dense(units = 1, activation = "sigmoid")
 
@@ -113,14 +155,16 @@ summary(model)
 model %>% compile(
   optimizer = "rmsprop", #"adam", #
   loss = "binary_crossentropy",
-  metrics = c("accuracy", 
-              "sensitivity" = metric_sensitivity,
-              "specificity" = metric_specificity)#,
+  metrics = c("accuracy",
+              "precision" = metric_precision,
+              "recall" = metric_recall)
+              #"sensitivity" = metric_sensitivity,
+              #"specificity" = metric_specificity)#,
   #"toxic_class_performing" = metric_single_class_accuracy)
 )
 
 checkpoint <- callback_model_checkpoint(
-  filepath = "model.hdf5", 
+  filepath = "modelv3.hdf5", 
   save_best_only = TRUE, 
   period = 1,
   verbose = 1
@@ -130,7 +174,7 @@ early_stopping <- callback_early_stopping(patience = 5)
 
 ### Fitting Keras model
 history <- model %>% fit(
-  X_train,
+  X_train_norm,
   y_train,
   epochs = 100,
   batch_size = 64,
@@ -141,29 +185,47 @@ history <- model %>% fit(
   callbacks = list(checkpoint, early_stopping, callback_tensorboard("logs/run"))
 )
 
+#model_saved <- load_model_hdf5("modelv3.hdf5")#, custom_objects = NULL, compile = TRUE)
+
 summary(model)
 plot(history)
 
 library(ROCR)
 library(Metrics)
 #training performance
-y_train_pred <- model %>% predict_classes(X_train)
-y_train_pred_prob <- model %>% predict_proba(X_train)
+y_train_pred <- model %>% predict_classes(X_train_norm)
+y_train_pred_prob <- model %>% predict_proba(X_train_norm)
 result_train <- confusionMatrix(y_train_pred, y_train)
 result_train
 auc(y_train, y_train_pred_prob)
 #result_train$byClass[7] #F1
 
 #testing performance
-y_test_pred <- model %>% predict_classes(X_test)
-y_test_pred_prob <- model %>% predict_proba(X_test)
+y_test_pred <- model %>% predict_classes(X_test_norm)
+y_test_pred_prob <- model %>% predict_proba(X_test_norm)
 result_test <- confusionMatrix(y_test_pred, y_test)
 result_test
 auc(y_test, y_test_pred_prob)
+library(pROC)
+plot(roc(y_test, y_test_pred_prob))
 
 
+### output consideration
+possible_k <- seq(0, 0.5, length.out = 100)
+precision <- sapply(possible_k, function(k) {
+  predicted_class <- as.numeric(y_test_pred_prob > k)
+  sum(predicted_class == 1 & y_test == 1)/sum(predicted_class)
+})
 
+qplot(possible_k, precision, geom = "line") + labs(x = "Threshold", y = "Precision")
 
+recall <- sapply(possible_k, function(k) {
+  predicted_class <- as.numeric(y_test_pred_prob > k)
+  sum(predicted_class == 1 & y_test == 1)/sum(y_test)
+})
+qplot(possible_k, recall, geom = "line") + labs(x = "Threshold", y = "Recall")
+
+#####
 
 
 
